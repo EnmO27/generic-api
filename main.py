@@ -42,6 +42,7 @@ import logging
 import asyncio
 import tempfile
 import uuid
+from fastapi import status
 
 print("PORT:", os.environ.get("PORT"))
 logging.basicConfig(level=logging.INFO)
@@ -964,7 +965,6 @@ async def send_whatsapp_template(req: WhatsappTemplateRequest):
 
 ##########################REPORT LAB #####################################
 
-@app.post("/generate-pdf-reportlab")
 async def generar_pdf(protocolData: Dict[str, Any], language: str = "es"):
     # Crear archivo PDF temporal
     temp_pdf = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
@@ -1693,21 +1693,23 @@ async def generar_pdf(protocolData: Dict[str, Any], language: str = "es"):
         # Construir PDF
         doc.build(elementos)
 
-        # Subir PDF a Azure Blob con httpx
-        async with httpx.AsyncClient() as client:
-            with open(temp_pdf.name, "rb") as f:
-                files = {"file": ("reporte.pdf", f, "application/pdf")}
-                response = await client.post(
-                    "https://protocolos-qa-bk.azurewebsites.net/Files/Upload",
-                    files=files
-                )
+        # Subir PDF a Azure Blob con httpx (comentado, no se usa)
+        # async with httpx.AsyncClient() as client:
+        #     with open(temp_pdf.name, "rb") as f:
+        #         files = {"file": ("reporte.pdf", f, "application/pdf")}
+        #         response = await client.post(
+        #             "https://protocolos-qa-bk.azurewebsites.net/Files/Upload",
+        #             files=files
+        #         )
 
-        # Evaluar respuesta
-        if response.status_code == 200:
-            data = response.json()
-            return {"url": data.get("url", "URL no proporcionada por el backend")}
-        else:
-            return JSONResponse(status_code=500, content={"error": "Falló la subida al blob"})
+        # Devuelve el blob binario directamente como application/pdf
+        with open(temp_pdf.name, "rb") as f:
+            pdf_bytes = f.read()
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": "attachment; filename=reporte.pdf"}
+        )
 
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
@@ -1715,6 +1717,59 @@ async def generar_pdf(protocolData: Dict[str, Any], language: str = "es"):
     finally:
         if os.path.exists(temp_pdf.name):
             os.remove(temp_pdf.name)
+
+class ProtocolDataRequest(BaseModel):
+    protocolData: Dict[str, Any]
+    language: str = "es"
+
+@app.post("/generate-protocol-reportlab", response_class=Response)
+async def generate_pdf_endpoint(request: ProtocolDataRequest):
+    """
+    Recibe protocolData y language, genera un PDF y retorna el blob.
+    """
+    return await generar_pdf(request.protocolData, request.language)
+
+class ProtocolDataListRequest(BaseModel):
+    protocolDataList: List[Dict[str, Any]]
+    language: str = "es"
+    filename: str = "protocols.zip"
+
+@app.post("/generate-protocols-zip-reportlab")
+async def generate_pdfs_zip_endpoint(request: ProtocolDataListRequest):
+    """
+    Recibe un array de protocolData y language, genera un PDF por cada uno y retorna un ZIP con todos los PDFs.
+    """
+    try:
+        pdf_files = []
+        for idx, protocolData in enumerate(request.protocolDataList):
+            # Generar PDF y guardar en memoria
+            temp_pdf = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+            temp_pdf.close()
+            try:
+                # Usar la función existente pero guardar el PDF en disco temporal
+                await generar_pdf(protocolData, request.language)
+                # El archivo PDF se guarda en temp_pdf.name
+                with open(temp_pdf.name, "rb") as f:
+                    pdf_bytes = f.read()
+                pdf_files.append((f"protocol_{idx+1}.pdf", pdf_bytes))
+            finally:
+                if os.path.exists(temp_pdf.name):
+                    os.remove(temp_pdf.name)
+
+        # Crear ZIP en memoria
+        zip_buffer = BytesIO()
+        with ZipFile(zip_buffer, "w", compression=ZIP_DEFLATED) as zip_file:
+            for pdf_name, pdf_bytes in pdf_files:
+                zip_file.writestr(pdf_name, pdf_bytes)
+        zip_buffer.seek(0)
+
+        return Response(
+            content=zip_buffer.getvalue(),
+            media_type="application/zip",
+            headers={"Content-Disposition": f"attachment; filename={request.filename}"}
+        )
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 ##########################################################################
 
