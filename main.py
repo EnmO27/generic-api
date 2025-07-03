@@ -3,11 +3,11 @@ from fastapi.responses import StreamingResponse, PlainTextResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, PageBreak, KeepTogether
+from reportlab.platypus import SimpleDocTemplate, BaseDocTemplate, Frame, PageTemplate, Paragraph, Spacer, Table, TableStyle, Image, PageBreak, KeepTogether
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.enums import TA_LEFT, TA_CENTER
-from reportlab.lib.colors import black
+from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
+from reportlab.lib.colors import black, grey
 from reportlab.lib import colors
 from reportlab.lib.units import cm
 
@@ -1005,7 +1005,8 @@ async def generar_pdf(protocolData: Dict[str, Any], language: str = "es"):
             buffer.seek(0)
         
         logo_img = Image(buffer, width=3*cm, height=3*cm)
-        
+        styles = getSampleStyleSheet()
+
         estilo_bold = ParagraphStyle(
             name="CeldaBold",
             fontName="Helvetica-Bold",   # o "Times-Bold", "Courier-Bold"
@@ -1045,28 +1046,118 @@ async def generar_pdf(protocolData: Dict[str, Any], language: str = "es"):
             alignment=TA_CENTER,
             textColor=black
         )
-
-        # Estilo y contenido del PDF
-        doc = SimpleDocTemplate(temp_pdf.name, pagesize=A4, leftMargin=1.5*cm, rightMargin=1.5*cm)
-        ancho_util = A4[0] - doc.leftMargin - doc.rightMargin
-        styles = getSampleStyleSheet()
-        elementos = []
         
-        # fila = [
-        #     logo_img,
-        #     Paragraph("Elemento 2", styles["Normal"]),
-        #     Paragraph("Elemento 3", styles["Normal"]),
-        # ]
+        estilo_normal_header_center = ParagraphStyle(
+            name="CeldaNormal",
+            fontName="Helvetica-Bold",
+            fontSize=12,
+            alignment=TA_CENTER,
+            textColor=black
+        )
+        
+        estilo_normal_header_right = ParagraphStyle(
+            name="CeldaNormal",
+            fontName="Helvetica",
+            fontSize=7,
+            alignment=TA_RIGHT,
+            textColor=black
+        )
+        
+        estilo_normal_footer_left = ParagraphStyle(
+            name="CeldaNormal",
+            fontName="Helvetica",
+            fontSize=8,
+            alignment=TA_LEFT,
+            textColor=grey
+        )
+        
+        estilo_normal_footer_center = ParagraphStyle(
+            name="CeldaNormal",
+            fontName="Helvetica",
+            fontSize=8,
+            alignment=TA_CENTER,
+            textColor=grey
+        )
+        
+        estilo_normal_footer_right = ParagraphStyle(
+            name="CeldaNormal",
+            fontName="Helvetica",
+            fontSize=8,
+            alignment=TA_RIGHT,
+            textColor=grey
+        )
+        
+        fila_header = [
+            logo_img,
+            Paragraph("REPORTE DE PRUEBAS A TRANSFORMADOR DE CORRIENTE" if language == "es" else "CERTIFICATE TEST REPORT FOR CURRENT TRANSFORMER", estilo_normal_header_center),
+            Paragraph("EQUIPOS ELÉCTRICOS CORE S.A de C.V<br/>Mirto 36, Lomas de San Miguel, 52928<br/>Cd López Mateos, Mé<br/>Tel, +(52) 55 58 87 08 71", estilo_normal_header_right),
+        ]
+    
 
-        # Ancho total de A4 es 595 puntos. Quitando márgenes, deja ~540pt útiles
-        # tabla = Table([fila], colWidths=[180, 180, 180])  # 180 x 3 = 540 pt aprox
+        #Ancho total de A4 es 595 puntos. Quitando márgenes, deja ~540pt útiles
+        tabla_header = Table([fila_header], colWidths=[160, 220, 160])  # 180 x 3 = 540 pt aprox
 
-        # tabla.setStyle(TableStyle([
-        #     ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-        #     ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        # ]))
+        tabla_header.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ]))
+        
+        def draw_header_footer(canvas, doc):
+            canvas.saveState()
+
+            width, height = A4
+            x = (width - 540) / 2  # Centrar horizontal
+
+            # ---------------- Encabezado ----------------
+            y_header = height - 90  # desde arriba
+            tabla_header.wrapOn(canvas, 540, 60)
+            tabla_header.drawOn(canvas, x, y_header)
+
+            # ---------------- Footer (como tabla) ----------------
+            fila_footer = [
+                Paragraph("Enero 2025 REV-A" if language == "es" else "January 2025 REV-A", estilo_normal_footer_left),
+                Paragraph(f"Página {doc.page}" if language == "es" else f"Page {doc.page}", estilo_normal_footer_center),
+                Paragraph("FIT: 132", estilo_normal_footer_right),
+            ]
+
+            tabla_footer = Table([fila_footer], colWidths=[180, 180, 180])
+            tabla_footer.setStyle(TableStyle([
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ]))
+
+            y_footer = 30  # posición desde abajo de la página
+            tabla_footer.wrapOn(canvas, 540, 40)
+            tabla_footer.drawOn(canvas, x, y_footer)
+
+            canvas.restoreState()
 
         # elementos.append(tabla)
+        
+        # Estilo y contenido del PDF
+        # doc = SimpleDocTemplate(temp_pdf.name, pagesize=A4, leftMargin=1.5*cm, rightMargin=1.5*cm)
+        
+        doc = BaseDocTemplate(
+            temp_pdf.name,
+            pagesize=A4,
+            rightMargin=1.5*cm,
+            leftMargin=1.5*cm,
+            topMargin=4*cm,   # espacio suficiente para el encabezado
+            bottomMargin=1.5*cm
+        )
+
+        frame = Frame(
+            doc.leftMargin,
+            doc.bottomMargin,
+            doc.width,
+            doc.height,
+            id='normal'
+        )
+
+        template = PageTemplate(id='test', frames=frame, onPage=draw_header_footer)
+        doc.addPageTemplates([template])
+
+        ancho_util = A4[0] - doc.leftMargin - doc.rightMargin
+        elementos = []
+        
         # Tabla de cabecera
         datos_tabla = [
             [
