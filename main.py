@@ -1,3 +1,8 @@
+import matplotlib
+matplotlib.use('Agg')
+
+from PIL import Image as PILImage
+
 from fastapi import Body, FastAPI, UploadFile, File, Response, HTTPException, BackgroundTasks, Form, Request, Query
 from fastapi.responses import StreamingResponse, PlainTextResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -42,6 +47,8 @@ import logging
 import asyncio
 import tempfile
 import uuid
+import shutil
+import cairosvg
 from fastapi import status
 
 print("PORT:", os.environ.get("PORT"))
@@ -63,148 +70,6 @@ job_status: Dict[str, str] = {}  # jobId -> "pendiente" | "procesando" | "comple
 job_errors: Dict[str, str] = {}  # jobId -> mensaje de error (si hay)
 zip_folder = "/tmp/zip_jobs"
 os.makedirs(zip_folder, exist_ok=True)
-
-class HtmlZipRequest(BaseModel):
-    htmls: List[str]
-    offf: str
-    language: str = "es"
-    filename: str = "documentos.zip"
-
-# Evento global para manejar la cancelación
-cancel_task = False
-
-def generar_zip_en_background(job_id: str, request: HtmlZipRequest):
-    try:
-        job_status[job_id] = "procesando"
-        zip_path = f"{zip_folder}/{job_id}.zip"
-
-        """
-        Recibe un array de HTMLs, los convierte a PDFs y devuelve un ZIP con todos los PDFs como respuesta.
-        """
-        # Definir textos según idioma
-        if request.language.lower() == "en":
-            header_title = "CURRENT TRANSFORMER TEST REPORT"
-            company_name = "EQUIPOS ELÉCTRICOS CORE S.A de C.V"
-            address1 = "Mirto 36, Lomas de San Miguel, 52928,"
-            address2 = "Cd López Mateos, Méx"
-            phone = "Tel, +(52) 55 58 87 08 71"
-            footer_left = "January 2025 REV-A"
-            footer_center = "Page"
-            footer_right = "FIT: 132"
-        else:
-            header_title = "REPORTE DE PRUEBAS A TRANSFORMADOR DE CORRIENTE"
-            company_name = "EQUIPOS ELÉCTRICOS CORE S.A de C.V"
-            address1 = "Mirto 36, Lomas de San Miguel, 52928,"
-            address2 = "Cd López Mateos, Méx"
-            phone = "Tel, +(52) 55 58 87 08 71"
-            footer_left = "Enero 2025 REV-A"
-            footer_center = "Página"
-            footer_right = "FIT: 132"
-            
-        margin_css = f"""
-        <style>
-        @page {{
-            margin: 0cm;
-            margin-top: 4.5cm;
-            margin-bottom: 2.5cm;
-            @top-center {{
-                content: element(header);
-            }}
-            @bottom-left {{
-                content: "{footer_left}";
-                color: #888;
-                font-size: 10px;
-                font-family: Arial, sans-serif;
-                margin-left: 2cm;
-            }}
-            @bottom-center {{
-                content: "{footer_center} " counter(page) " / " counter(pages);
-                color: #888;
-                font-size: 10px;
-                font-family: Arial, sans-serif;
-            }}
-            @bottom-right {{
-                content: "{footer_right}";
-                color: #888;
-                font-size: 10px;
-                font-family: Arial, sans-serif;
-                margin-right: 2cm;
-            }}
-        }}
-        #header {{
-            display: grid;
-            grid-template-columns: 25% 50% 25%;
-            position: running(header);
-            width: 18cm;
-            height: 3cm;
-            background: white;
-            font-family: Arial, sans-serif;
-        }}
-        #footer {{
-            display: grid;
-            grid-template-columns: 25% 50% 25%;
-            width: 20cm;
-            text-align: center;
-            font-size: 10px;
-            color: #888;
-            position: running(footer);
-            height: 1.5cm;
-            background: white;
-            font-family: Arial, sans-serif;
-        }}
-        </style>
-        <div id="header">
-            <div>
-                <img
-                    src="https://tendero.blob.core.windows.net/fileseecore/c124a0bb-c546-48f9-a9c9-56443f1554b4.png?sv=2024-08-04&st=2025-06-21T17%3A48%3A11Z&se=2125-06-21T17%3A48%3A11Z&sr=b&sp=r&sig=sQisxXSu5LkJG7RDfSD%2BcV9anlamuqW9X4W4dp8J%2BZ4%3D"
-                    style="width: 100px" />
-            </div>
-            <div style="display: flex; justify-content: center; text-align: center;">
-                <h3 style="font-weight: bold; color: black; font-size: 20px; margin: 0;">
-                    {header_title}
-                </h3>
-            </div>
-            <div>
-                <p style="color: black; font-size: 10px; text-align: right; font-weight: bold; margin: 0;">
-                    {company_name}
-                </p>
-                <p style="color: black; font-size: 10px; text-align: right; font-weight: bold; margin: 0;">
-                    {address1}
-                </p>
-                <p style="color: black; font-size: 10px; text-align: right; font-weight: bold; margin: 0;">
-                    {address2}
-                </p>
-                <p style="color: black; font-size: 10px; text-align: right; font-weight: bold; margin: 0;">
-                    {phone}
-                </p>
-            </div>
-        </div>
-        <div id="footer">
-            <div style="background: white; width: 100%">
-                <p>{footer_left}</p>
-            </div>
-            <div style="background: white; width: 100%">
-                <p>{footer_center}</p>
-            </div>
-            <div style="background: white; width: 100%">
-                <p>{footer_right}</p>
-            </div>
-        </div>
-        """
-
-        with ZipFile(zip_path, "w", compression=ZIP_DEFLATED) as zip_file:
-            for idx, html in enumerate(request.htmls):
-                full_html = margin_css + html
-                pdf_io = BytesIO()
-                HTML(string=full_html).write_pdf(pdf_io)
-                pdf_io.seek(0)
-                zip_file.writestr(f"{request.offf}-{idx+1}.pdf", pdf_io.read())
-
-        job_status[job_id] = "completado"
-    except Exception as e:
-        job_status[job_id] = "error"
-        job_errors[job_id] = str(e)
-
 
 @app.on_event("startup")
 async def on_startup():
@@ -832,14 +697,17 @@ async def htmls_to_pdfs_zip_upload_stream_yield(request: HtmlsToPdfsZipUploadReq
     )
 
 ################################### GENERATE ZIP ####################
-
+class ProtocolDataListRequest(BaseModel):
+    protocolDataList: List[Dict[str, Any]]
+    language: str = "es"
+    filename: str = "protocols.zip"
+    
 @app.post("/start-pdfs-generation")
-async def iniciar_proceso(request: HtmlZipRequest, background_tasks: BackgroundTasks):
+def iniciar_proceso(request: ProtocolDataListRequest, background_tasks: BackgroundTasks):
     job_id = str(uuid.uuid4())
     job_status[job_id] = "pendiente"
 
-    # Iniciar proceso en segundo plano
-    background_tasks.add_task(generar_zip_en_background, job_id, request)
+    background_tasks.add_task(generate_pdfs_zip_endpoint, job_id, request)
 
     return {"jobId": job_id}
 
@@ -876,6 +744,29 @@ async def descargar_zip(jobId: str):
         headers={"Content-Disposition": f"attachment; filename={jobId}.zip"}
     )
     
+@app.delete("/cancel-pdfs-generation")
+async def cancelar_proceso(jobId: str = Query(..., description="JobId del proceso que se desea cancelar")):
+    """
+    Cancela y limpia un proceso de generación de PDFs en segundo plano.
+    """
+    if jobId not in job_status:
+        raise HTTPException(status_code=404, detail="Proceso no encontrado")
+
+    # Marcar como cancelado (opcional, para registro)
+    job_status[jobId] = "cancelado"
+
+    # Eliminar el archivo ZIP si ya se había generado
+    zip_path = f"{zip_folder}/{jobId}.zip"
+    if os.path.exists(zip_path):
+        os.remove(zip_path)
+
+    # Limpiar registros
+    job_status.pop(jobId, None)
+    job_errors.pop(jobId, None)
+
+    return {"jobId": jobId, "detail": "Proceso cancelado y recursos limpiados correctamente"}
+
+
 ##################################### META MESSAGES ENDPOINT ##################
 
 VERIFY_TOKEN = "Mktwsp231201"  # Cámbialo por uno único y seguro
@@ -965,47 +856,62 @@ async def send_whatsapp_template(req: WhatsappTemplateRequest):
 
 ##########################REPORT LAB #####################################
 
-async def generar_pdf(protocolData: Dict[str, Any], language: str = "es"):
+# @app.post("/compress-image")
+# async def compress_image(url_imagen: str = Body(..., embed=True)):
+#     """
+#     Descarga una imagen desde una URL, la comprime y redimensiona a 120x120 JPEG, y la devuelve como archivo descargable.
+#     """
+#     async with httpx.AsyncClient() as client:
+#         response = await client.get(url_imagen)
+#         if response.status_code != 200:
+#             raise HTTPException(status_code=400, detail="No se pudo descargar la imagen")
+
+#         original = PILImage.open(BytesIO(response.content))
+
+#         # Convertir a RGBA si tiene modo P (paleta indexada)
+#         if original.mode == "P":
+#             original = original.convert("RGBA")
+
+#         # Si tiene transparencia, agregar fondo blanco
+#         if original.mode in ("RGBA", "LA"):
+#             fondo_blanco = PILImage.new("RGB", original.size, (255, 255, 255))
+#             fondo_blanco.paste(original, mask=original.split()[-1])
+#             original = fondo_blanco
+#         else:
+#             original = original.convert("RGB")
+
+#         # Redimensionar
+#         resized = original.resize((120, 120))
+
+#         buffer = BytesIO()
+#         resized.save(buffer, format="JPEG", quality=75, optimize=True)
+#         buffer.seek(0)
+
+#     return StreamingResponse(
+#         buffer,
+#         media_type="image/jpeg",
+#         headers={"Content-Disposition": "attachment; filename=compressed.jpg"}
+#     )
+
+def generar_pdf(protocolData: Dict[str, Any], language: str = "es", output_path: str = None):
     # Crear archivo PDF temporal
     temp_pdf = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
     temp_pdf.close()  # importante: cerrar inmediatamente
 
     try:
         
-        url_imagen = "https://tendero.blob.core.windows.net/fileseecore/c124a0bb-c546-48f9-a9c9-56443f1554b4.png?sv=2024-08-04&st=2025-06-21T17%3A48%3A11Z&se=2125-06-21T17%3A48%3A11Z&sr=b&sp=r&sig=sQisxXSu5LkJG7RDfSD%2BcV9anlamuqW9X4W4dp8J%2BZ4%3D"
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url_imagen)
-            if response.status_code != 200:
-                raise Exception("No se pudo descargar la imagen")
-
-            # 🖼 Convertir a JPEG comprimido y redimensionado
-            original = PILImage.open(BytesIO(response.content))
-
-            # Convertir a RGBA si tiene modo P (paleta indexada)
-            if original.mode == "P":
-                original = original.convert("RGBA")
-
-            # Si tiene transparencia, agregar fondo blanco
-            if original.mode in ("RGBA", "LA"):
-                # Solo usar .split() si es una imagen PIL válida
-                if hasattr(original, "split"):
-                    fondo_blanco = PILImage.new("RGB", original.size, (255, 255, 255))
-                    fondo_blanco.paste(original, mask=original.split()[-1])
-                    original = fondo_blanco
-                else:
-                    raise Exception("El objeto original no es una imagen PIL válida")
-            else:
-                original = original.convert("RGB")  # asegurar modo JPEG compatible
-
-            # Redimensionar
-            resized = original.resize((120, 120))
-
-            buffer = BytesIO()
-            resized.save(buffer, format="JPEG", quality=75, optimize=True)
-            buffer.seek(0)
+        ################################Convertir logo
         
-        logo_img = Image(buffer, width=3*cm, height=3*cm)
+        url_imagen = "https://tendero.blob.core.windows.net/fileseecore/da268367-2349-4bab-bb71-bf6e4d6e0991.jpg?sv=2024-08-04&st=2025-07-03T20%3A26%3A30Z&se=2125-07-03T20%3A26%3A30Z&sr=b&sp=r&sig=vEWx1o%2FYl%2FYiSexoIgEJ49cD63Nfs9wMtwK1KEHFFdM%3D"
+        
+        # Convertir el buffer a un blob y crear una URL temporal (solo posible en frontend/browser, no en backend Python puro)
+        # En backend, puedes guardar el archivo y construir una URL si tienes un servidor de archivos estáticos.
+        # Aquí, como ejemplo, guardamos el logo en un archivo temporal y mostramos la ruta.
+        
+        logo_img = Image(url_imagen, width=3*cm, height=3*cm)
         styles = getSampleStyleSheet()
+        
+        ##################################################
 
         estilo_bold = ParagraphStyle(
             name="CeldaBold",
@@ -1377,8 +1283,6 @@ async def generar_pdf(protocolData: Dict[str, Any], language: str = "es"):
         num_cols = len(first_chart_object_first) * 2
         col_width = ancho_util / num_cols
         
-        print('numbercolum', col_width, ancho_util, num_cols)
-
         first_chart_table_first = Table(first_chart_data_first, colWidths=[col_width] * num_cols)
         
         style = TableStyle([
@@ -1416,6 +1320,11 @@ async def generar_pdf(protocolData: Dict[str, Any], language: str = "es"):
             label = f"{serie['line']} ({serie['relation']})"
 
             plt.loglog(x, y, label=label, color=colorsPyplot[idx % len(colorsPyplot)])
+
+            from matplotlib.ticker import ScalarFormatter
+            ax = plt.gca()
+            ax.xaxis.set_major_formatter(ScalarFormatter())
+            ax.yaxis.set_major_formatter(ScalarFormatter())
 
         # Configurar gráfica
         plt.xlabel("Corriente de excitación secundaria Ie [A]")
@@ -1481,7 +1390,6 @@ async def generar_pdf(protocolData: Dict[str, Any], language: str = "es"):
             Paragraph("VA/ Cos phi", estilo_normal_centered),
         ]
         
-        print('second_chart_series_first', second_chart_series_first[0])
         for percent in second_chart_series_first[0]["data"]:
             second_chart_table_third_row_first.append(Paragraph(f"{percent[0]}%", estilo_normal_centered))
         
@@ -1592,7 +1500,6 @@ async def generar_pdf(protocolData: Dict[str, Any], language: str = "es"):
             Paragraph("VA/ Cos phi", estilo_normal_centered),
         ]
         
-        print('second_chart_series_first', third_chart_series_first[0])
         for percent in third_chart_series_first[0]["data"]:
             third_chart_table_third_row_first.append(Paragraph(f"{percent[0]}%", estilo_normal_centered))
         
@@ -1693,26 +1600,18 @@ async def generar_pdf(protocolData: Dict[str, Any], language: str = "es"):
         # Construir PDF
         doc.build(elementos)
 
-        # Subir PDF a Azure Blob con httpx (comentado, no se usa)
-        # async with httpx.AsyncClient() as client:
-        #     with open(temp_pdf.name, "rb") as f:
-        #         files = {"file": ("reporte.pdf", f, "application/pdf")}
-        #         response = await client.post(
-        #             "https://protocolos-qa-bk.azurewebsites.net/Files/Upload",
-        #             files=files
-        #         )
+        if output_path:
+            shutil.move(temp_pdf.name, output_path)
+            return  # Nada, porque el background no espera retorno
 
-        # Devuelve el blob binario directamente como application/pdf
-        with open(temp_pdf.name, "rb") as f:
-            pdf_bytes = f.read()
-        return Response(
-            content=pdf_bytes,
-            media_type="application/pdf",
-            headers={"Content-Disposition": "attachment; filename=reporte.pdf"}
-        )
+        else:
+            with open(temp_pdf.name, "rb") as f:
+                pdf_bytes = f.read()
+            return pdf_bytes
 
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        print(f"Error al generar PDF: {e}")
+        raise
 
     finally:
         if os.path.exists(temp_pdf.name):
@@ -1722,33 +1621,173 @@ class ProtocolDataRequest(BaseModel):
     protocolData: Dict[str, Any]
     language: str = "es"
 
-@app.post("/generate-protocol-reportlab", response_class=Response)
-async def generate_pdf_endpoint(request: ProtocolDataRequest):
+@app.post("/generate-protocol-reportlab")
+def generate_pdf_endpoint(request: ProtocolDataRequest):
     """
     Recibe protocolData y language, genera un PDF y retorna el blob.
     """
-    return await generar_pdf(request.protocolData, request.language)
+    pdf_bytes = generar_pdf(request.protocolData, request.language)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "attachment; filename=report.pdf"}
+    )
 
-class ProtocolDataListRequest(BaseModel):
-    protocolDataList: List[Dict[str, Any]]
+class HtmlZipRequest(BaseModel):
+    htmls: List[str]
+    offf: str
     language: str = "es"
-    filename: str = "protocols.zip"
+    filename: str = "documentos.zip"
 
-@app.post("/generate-protocols-zip-reportlab")
-async def generate_pdfs_zip_endpoint(request: ProtocolDataListRequest):
-    """
-    Recibe un array de protocolData y language, genera un PDF por cada uno y retorna un ZIP con todos los PDFs.
-    """
+# Evento global para manejar la cancelación
+cancel_task = False
+
+def generar_zip_en_background(job_id: str, request: HtmlZipRequest):
     try:
+        job_status[job_id] = "procesando"
+        zip_path = f"{zip_folder}/{job_id}.zip"
+
+        """
+        Recibe un array de HTMLs, los convierte a PDFs y devuelve un ZIP con todos los PDFs como respuesta.
+        """
+        # Definir textos según idioma
+        if request.language.lower() == "en":
+            header_title = "CURRENT TRANSFORMER TEST REPORT"
+            company_name = "EQUIPOS ELÉCTRICOS CORE S.A de C.V"
+            address1 = "Mirto 36, Lomas de San Miguel, 52928,"
+            address2 = "Cd López Mateos, Méx"
+            phone = "Tel, +(52) 55 58 87 08 71"
+            footer_left = "January 2025 REV-A"
+            footer_center = "Page"
+            footer_right = "FIT: 132"
+        else:
+            header_title = "REPORTE DE PRUEBAS A TRANSFORMADOR DE CORRIENTE"
+            company_name = "EQUIPOS ELÉCTRICOS CORE S.A de C.V"
+            address1 = "Mirto 36, Lomas de San Miguel, 52928,"
+            address2 = "Cd López Mateos, Méx"
+            phone = "Tel, +(52) 55 58 87 08 71"
+            footer_left = "Enero 2025 REV-A"
+            footer_center = "Página"
+            footer_right = "FIT: 132"
+            
+        margin_css = f"""
+        <style>
+        @page {{
+            margin: 0cm;
+            margin-top: 4.5cm;
+            margin-bottom: 2.5cm;
+            @top-center {{
+                content: element(header);
+            }}
+            @bottom-left {{
+                content: "{footer_left}";
+                color: #888;
+                font-size: 10px;
+                font-family: Arial, sans-serif;
+                margin-left: 2cm;
+            }}
+            @bottom-center {{
+                content: "{footer_center} " counter(page) " / " counter(pages);
+                color: #888;
+                font-size: 10px;
+                font-family: Arial, sans-serif;
+            }}
+            @bottom-right {{
+                content: "{footer_right}";
+                color: #888;
+                font-size: 10px;
+                font-family: Arial, sans-serif;
+                margin-right: 2cm;
+            }}
+        }}
+        #header {{
+            display: grid;
+            grid-template-columns: 25% 50% 25%;
+            position: running(header);
+            width: 18cm;
+            height: 3cm;
+            background: white;
+            font-family: Arial, sans-serif;
+        }}
+        #footer {{
+            display: grid;
+            grid-template-columns: 25% 50% 25%;
+            width: 20cm;
+            text-align: center;
+            font-size: 10px;
+            color: #888;
+            position: running(footer);
+            height: 1.5cm;
+            background: white;
+            font-family: Arial, sans-serif;
+        }}
+        </style>
+        <div id="header">
+            <div>
+                <img
+                    src="https://tendero.blob.core.windows.net/fileseecore/c124a0bb-c546-48f9-a9c9-56443f1554b4.png?sv=2024-08-04&st=2025-06-21T17%3A48%3A11Z&se=2125-06-21T17%3A48%3A11Z&sr=b&sp=r&sig=sQisxXSu5LkJG7RDfSD%2BcV9anlamuqW9X4W4dp8J%2BZ4%3D"
+                    style="width: 100px" />
+            </div>
+            <div style="display: flex; justify-content: center; text-align: center;">
+                <h3 style="font-weight: bold; color: black; font-size: 20px; margin: 0;">
+                    {header_title}
+                </h3>
+            </div>
+            <div>
+                <p style="color: black; font-size: 10px; text-align: right; font-weight: bold; margin: 0;">
+                    {company_name}
+                </p>
+                <p style="color: black; font-size: 10px; text-align: right; font-weight: bold; margin: 0;">
+                    {address1}
+                </p>
+                <p style="color: black; font-size: 10px; text-align: right; font-weight: bold; margin: 0;">
+                    {address2}
+                </p>
+                <p style="color: black; font-size: 10px; text-align: right; font-weight: bold; margin: 0;">
+                    {phone}
+                </p>
+            </div>
+        </div>
+        <div id="footer">
+            <div style="background: white; width: 100%">
+                <p>{footer_left}</p>
+            </div>
+            <div style="background: white; width: 100%">
+                <p>{footer_center}</p>
+            </div>
+            <div style="background: white; width: 100%">
+                <p>{footer_right}</p>
+            </div>
+        </div>
+        """
+
+        with ZipFile(zip_path, "w", compression=ZIP_DEFLATED) as zip_file:
+            for idx, html in enumerate(request.htmls):
+                full_html = margin_css + html
+                pdf_io = BytesIO()
+                HTML(string=full_html).write_pdf(pdf_io)
+                pdf_io.seek(0)
+                zip_file.writestr(f"{request.offf}-{idx+1}.pdf", pdf_io.read())
+
+        job_status[job_id] = "completado"
+    except Exception as e:
+        job_status[job_id] = "error"
+        job_errors[job_id] = str(e)
+
+def generate_pdfs_zip_endpoint(job_id: str, request: ProtocolDataListRequest):
+    try:
+        job_status[job_id] = "procesando"
+        zip_path = f"{zip_folder}/{job_id}.zip"
+
         pdf_files = []
+
         for idx, protocolData in enumerate(request.protocolDataList):
-            # Generar PDF y guardar en memoria
             temp_pdf = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
             temp_pdf.close()
             try:
-                # Usar la función existente pero guardar el PDF en disco temporal
-                await generar_pdf(protocolData, request.language)
-                # El archivo PDF se guarda en temp_pdf.name
+                # 🩺 generar_pdf debe guardar el PDF en temp_pdf.name sin retornar Response
+                generar_pdf(protocolData, request.language, output_path=temp_pdf.name)
+
                 with open(temp_pdf.name, "rb") as f:
                     pdf_bytes = f.read()
                 pdf_files.append((f"protocol_{idx+1}.pdf", pdf_bytes))
@@ -1756,20 +1795,14 @@ async def generate_pdfs_zip_endpoint(request: ProtocolDataListRequest):
                 if os.path.exists(temp_pdf.name):
                     os.remove(temp_pdf.name)
 
-        # Crear ZIP en memoria
-        zip_buffer = BytesIO()
-        with ZipFile(zip_buffer, "w", compression=ZIP_DEFLATED) as zip_file:
+        with ZipFile(zip_path, "w", compression=ZIP_DEFLATED) as zip_file:
             for pdf_name, pdf_bytes in pdf_files:
                 zip_file.writestr(pdf_name, pdf_bytes)
-        zip_buffer.seek(0)
 
-        return Response(
-            content=zip_buffer.getvalue(),
-            media_type="application/zip",
-            headers={"Content-Disposition": f"attachment; filename={request.filename}"}
-        )
+        job_status[job_id] = "completado"
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        job_status[job_id] = "error"
+        job_errors[job_id] = str(e)
 
 ##########################################################################
 
