@@ -10,3 +10,5 @@ gunicorn
 weasyprint
 reportlab
 svglib
+celery
+redis

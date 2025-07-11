@@ -37,6 +37,7 @@ from io import BytesIO
 from zipfile import ZipFile, ZIP_DEFLATED
 from pydantic import BaseModel
 from typing import List, Dict, Any
+from tasks import add
 
 import base64
 import httpx
@@ -767,6 +768,11 @@ async def cancelar_proceso(jobId: str = Query(..., description="JobId del proces
 
 
 ##################################### META MESSAGES ENDPOINT ##################
+
+@app.get("/sumar")
+async def sumar(x: int, y: int):
+    task = add.delay(x, y)
+    return {"task_id": task.id}
 
 VERIFY_TOKEN = "Mktwsp231201"  # Cámbialo por uno único y seguro
 
