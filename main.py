@@ -54,8 +54,7 @@ import shutil
 import cairosvg
 from fastapi import status
 
-from tasks import ProtocolDataListRequest, generate_pdfs_zip_task, adding, job_status
-from pdf_generator import generar_pdf
+from tasks import ProtocolDataListRequest, generate_pdfs_zip_task, generar_pdf, adding, job_status
 
 print("PORT:", os.environ.get("PORT"))
 logging.basicConfig(level=logging.INFO)
@@ -979,7 +978,8 @@ def generate_pdf_endpoint(request: ProtocolDataRequest):
     """
     Recibe protocolData y language, genera un PDF y retorna el blob.
     """
-    pdf_bytes = generar_pdf(request.protocolData, request.language)
+    generate_pdf_result = generar_pdf.delay(request.protocolData, request.language)
+    pdf_bytes = generate_pdf_result.get()
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
